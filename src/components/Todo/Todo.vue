@@ -170,38 +170,44 @@ export default {
         };
 
         const addTodo = async () => {
-            const todo = {
-                id: todos.value.length,
-                task: newTask.value,
-                deadline: newDeadline.value,
-                priority: newPriority.value,
-                completed: false,  // 초기 완료 상태는 false
-                labels: newLabel.value.split(','),
-                firebaseId: '',
-            };
-            try {
-                const docRef = await addDoc(collection(db, "todos"), todo);
-                console.log("Document written with ID: ", docRef.id);
-                const todoRef = doc(db, 'todos', docRef.id);
-                await updateDoc(todoRef, { firebaseId: docRef.id });
-                todo.firebaseId = docRef.id; // update the firebaseId of the todo
-                todos.value.push(todo); // push the todo after it has been added to Firestore
-            } catch (e) {
-                console.error("Error adding document: ", e);
+            if (user.value) { // 로그인한 사용자가 있는 경우에만 작업을 추가합니다.
+                const todo = {
+                    id: todos.value.length,
+                    task: newTask.value,
+                    deadline: newDeadline.value,
+                    priority: newPriority.value,
+                    completed: false,
+                    labels: newLabel.value.split(','),
+                    firebaseId: '',
+                    userId: user.value.uid // 사용자의 ID를 추가
+                };
+                try {
+                    const docRef = await addDoc(collection(db, `todos/${user.value.uid}/userTodos`), todo);
+                    console.log("Document written with ID: ", docRef.id);
+                    const todoRef = doc(db, `todos/${user.value.uid}/userTodos`, docRef.id);
+                    await updateDoc(todoRef, { firebaseId: docRef.id });
+                    todo.firebaseId = docRef.id;
+                    todos.value.push(todo);
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                }
+                newTask.value = '';
+                newDeadline.value = today;
+                newLabel.value = '';
+            } else {
+                console.error("No user logged in");
             }
-
-            newTask.value = '';
-            newDeadline.value = today;
-            newLabel.value = '';
-            // newPriority.value = '';
         };
         const deleteTodo = async (todo: TodoItem) => {
-            // Firebase Firestore에서도 삭제
-            const todoRef = doc(db, 'todos', todo.firebaseId);
-            await deleteDoc(todoRef);
-            const index = todos.value.findIndex(t => t.id === todo.id);
-            if (index !== -1) {
-                todos.value.splice(index, 1); // Remove the todo from local list after deleting it from Firestore
+            if (user.value) { // 로그인한 사용자가 있는 경우에만 작업을 삭제합니다.
+                const todoRef = doc(db, `todos/${user.value.uid}/userTodos`, todo.firebaseId);
+                await deleteDoc(todoRef);
+                const index = todos.value.findIndex(t => t.id === todo.id);
+                if (index !== -1) {
+                    todos.value.splice(index, 1);
+                }
+            } else {
+                console.error("No user logged in");
             }
         };
         const calculateDaysLeft = (deadline: string) => {
@@ -217,23 +223,24 @@ export default {
             return "green"; // Low
         };
         onMounted(async () => {
-            onAuthStateChanged(firebaseAuth, newUser => {
+            onAuthStateChanged(firebaseAuth, async newUser => {
                 user.value = newUser;
-            });
-            // Firestore에서 데이터를 가져옴
-            const q = query(collection(db, "todos"));
-            const querySnapshot = await getDocs(q);
-            todos.value = querySnapshot.docs.map(doc => {
-                const data = doc.data();
-                return {
-                    id: data.firebaseId,
-                    firebaseId: data.firebaseId,
-                    task: data.task,
-                    deadline: data.deadline,
-                    priority: data.priority,
-                    completed: data.completed,
-                    labels: data.labels
-                };
+                if (newUser) { // 로그인한 사용자가 있는 경우에만 작업을 불러옵니다.
+                    const q = query(collection(db, `todos/${newUser.uid}/userTodos`));
+                    const querySnapshot = await getDocs(q);
+                    todos.value = querySnapshot.docs.map(doc => {
+                        const data = doc.data();
+                        return {
+                            id: data.firebaseId,
+                            firebaseId: data.firebaseId,
+                            task: data.task,
+                            deadline: data.deadline,
+                            priority: data.priority,
+                            completed: data.completed,
+                            labels: data.labels
+                        };
+                    });
+                }
             });
         });
 
@@ -288,17 +295,25 @@ export default {
             editMode.value = todo.id;
         };
 
+        // saveTodo 메서드를 변경하십시오.
         const saveTodo = async () => {
-            if (editMode.value !== null) {
+            if (editMode.value !== null && user.value) { // 로그인한 사용자가 있는 경우에만 작업을 저장합니다.
                 const index = todos.value.findIndex(todo => todo.id === editMode.value);
-                const updatedTodo = { ...editData.value, labels: editData.value.labels.split(',') };
-                // Firebase Firestore에 업데이트
-                const todoRef = doc(db, 'todos', todos.value[index].firebaseId);
-                await updateDoc(todoRef, updatedTodo);
-                todos.value[index] = updatedTodo; // Update the todo in local list after updating it in Firestore
-                editMode.value = null;
+                if (index !== -1) {
+                    const todoRef = doc(db, `todos/${user.value.uid}/userTodos`, todos.value[index].firebaseId);
+                    await updateDoc(todoRef, {
+                        task: todos.value[index].task,
+                        deadline: todos.value[index].deadline,
+                        priority: todos.value[index].priority,
+                        completed: todos.value[index].completed,
+                        labels: todos.value[index].labels,
+                    });
+                }
+            } else {
+                console.error("No user logged in or nothing to save");
             }
         };
+
 
         const cancelEdit = () => {
             editMode.value = null;
