@@ -71,7 +71,7 @@
                     </span>
                     <span :style="{ color: priorityColor(todo.priority) }">
                         {{ todo.task }} - {{ todo.deadline }} ({{ calculateDaysLeft(todo.deadline) }} days left) - {{
-                        todo.priority }}
+                            todo.priority }}
                     </span>
                     <span>
                         <button @click="editTodo(todo)" class="edit-btn">Edit</button>
@@ -79,9 +79,8 @@
                     </span>
                 </div>
                 <div v-else class="edit-section">
-                    <input v-model="editData.task" placeholder="Edit task" class="input-field">
                     <input v-model="editData.labels" placeholder="Edit labels" class="input-field">
-
+                    <input v-model="editData.task" placeholder="Edit task" class="input-field">
                     <input type="date" v-model="editData.deadline" class="input-field">
                     <select v-model="editData.priority" class="select-field">
                         <option disabled value="">Please select a priority</option>
@@ -109,6 +108,7 @@
 <script lang="ts">
 interface TodoItem {
     id: number;
+    firebaseId: string; // 추가된 부분
     task: string;
     deadline: string;
     priority: string;
@@ -123,6 +123,8 @@ import { User } from 'firebase/auth';
 import { signOut } from 'firebase/auth'; // import signOut
 import { useRouter } from 'vue-router'; // Import useRouter
 
+import { getDocs, query, getFirestore, collection, addDoc, deleteDoc, doc, updateDoc } from "firebase/firestore";
+const db = getFirestore();
 
 
 
@@ -167,25 +169,39 @@ export default {
             }
         };
 
-        const addTodo = () => {
-            todos.value.push({
+        const addTodo = async () => {
+            const todo = {
                 id: todos.value.length,
                 task: newTask.value,
                 deadline: newDeadline.value,
                 priority: newPriority.value,
                 completed: false,  // 초기 완료 상태는 false
-                labels: newLabel.value.split(',')
-            });
+                labels: newLabel.value.split(','),
+                firebaseId: '',
+            };
+            try {
+                const docRef = await addDoc(collection(db, "todos"), todo);
+                console.log("Document written with ID: ", docRef.id);
+                const todoRef = doc(db, 'todos', docRef.id);
+                await updateDoc(todoRef, { firebaseId: docRef.id });
+                todo.firebaseId = docRef.id; // update the firebaseId of the todo
+                todos.value.push(todo); // push the todo after it has been added to Firestore
+            } catch (e) {
+                console.error("Error adding document: ", e);
+            }
 
             newTask.value = '';
             newDeadline.value = today;
             newLabel.value = '';
             // newPriority.value = '';
         };
-        const deleteTodo = (todo: TodoItem) => {
+        const deleteTodo = async (todo: TodoItem) => {
+            // Firebase Firestore에서도 삭제
+            const todoRef = doc(db, 'todos', todo.firebaseId);
+            await deleteDoc(todoRef);
             const index = todos.value.findIndex(t => t.id === todo.id);
             if (index !== -1) {
-                todos.value.splice(index, 1);
+                todos.value.splice(index, 1); // Remove the todo from local list after deleting it from Firestore
             }
         };
         const calculateDaysLeft = (deadline: string) => {
@@ -200,9 +216,24 @@ export default {
             if (priority === "Medium") return "orange";
             return "green"; // Low
         };
-        onMounted(() => {
+        onMounted(async () => {
             onAuthStateChanged(firebaseAuth, newUser => {
                 user.value = newUser;
+            });
+            // Firestore에서 데이터를 가져옴
+            const q = query(collection(db, "todos"));
+            const querySnapshot = await getDocs(q);
+            todos.value = querySnapshot.docs.map(doc => {
+                const data = doc.data();
+                return {
+                    id: data.firebaseId,
+                    firebaseId: data.firebaseId,
+                    task: data.task,
+                    deadline: data.deadline,
+                    priority: data.priority,
+                    completed: data.completed,
+                    labels: data.labels
+                };
             });
         });
 
@@ -257,10 +288,14 @@ export default {
             editMode.value = todo.id;
         };
 
-        const saveTodo = () => {
+        const saveTodo = async () => {
             if (editMode.value !== null) {
                 const index = todos.value.findIndex(todo => todo.id === editMode.value);
-                todos.value[index] = { ...editData.value, labels: editData.value.labels.split(',') };
+                const updatedTodo = { ...editData.value, labels: editData.value.labels.split(',') };
+                // Firebase Firestore에 업데이트
+                const todoRef = doc(db, 'todos', todos.value[index].firebaseId);
+                await updateDoc(todoRef, updatedTodo);
+                todos.value[index] = updatedTodo; // Update the todo in local list after updating it in Firestore
                 editMode.value = null;
             }
         };
@@ -349,8 +384,10 @@ export default {
 }
 
 .input-field {
+    width: 180px;
     padding: 10px;
     margin-bottom: 10px;
+    margin-left: 10px;
     border: 1px solid #d1d5db;
     border-radius: 5px;
 }
